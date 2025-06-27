@@ -35,5 +35,8 @@
     "reactive"
   ],
   "author": "Rishik Chowdary",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "newtk": "^1.0.4"
+  }
 }
