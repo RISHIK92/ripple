@@ -57,8 +57,34 @@ function useRippleEffect(event, handler, options) {
     const tools = { aborted: () => cancelled };
     const wrapped = async (payload) => {
       if (cancelled) return;
-      const loadingSignal = options?.loadingSignal ?? options?.loading;
-      const errorSignal = options?.errorSignal ?? options?.error;
+      let loadingSignal;
+      let errorSignal;
+      if (options && typeof options === "object" && "value" in options && typeof options.value === "object") {
+        const obj = options.value;
+        if ("loading" in obj && typeof obj.loading === "boolean") {
+          loadingSignal = {
+            get value() {
+              return options.value.loading;
+            },
+            set value(val) {
+              options.value = { ...options.value, loading: val };
+            }
+          };
+        }
+        if ("error" in obj) {
+          errorSignal = {
+            get value() {
+              return options.value.error;
+            },
+            set value(val) {
+              options.value = { ...options.value, error: val };
+            }
+          };
+        }
+      } else {
+        loadingSignal = options?.loadingSignal ?? options?.loading;
+        errorSignal = options?.errorSignal ?? options?.error;
+      }
       loadingSignal && (loadingSignal.value = true);
       errorSignal && (errorSignal.value = null);
       try {
@@ -990,18 +1016,21 @@ function T3() {
   if (1 === _2.push(this)) (l.requestAnimationFrame || q2)(F2);
 }
 
+// src/utils/constants.ts
+var RIPPLE_BRAND = Symbol("signal");
+var isBatching = false;
+var dirtyStores = /* @__PURE__ */ new Set();
+var proxyCache = /* @__PURE__ */ new WeakMap();
+var IS_RIPPLE_PROXY = Symbol("isRippleProxy");
+
 // src/utils/ripplePrimitive.ts
 function ripplePrimitive(initial) {
   let _value = initial;
   const subscribers = /* @__PURE__ */ new Set();
   const subscribe = (callback, selector = (v5) => v5) => {
-    const subscriber = {
-      callback,
-      selector,
-      prevValue: selector(_value)
-    };
-    subscribers.add(subscriber);
-    return () => subscribers.delete(subscriber);
+    const sub = { callback, selector, prevValue: selector(_value) };
+    subscribers.add(sub);
+    return () => subscribers.delete(sub);
   };
   return {
     get value() {
@@ -1011,9 +1040,9 @@ function ripplePrimitive(initial) {
       if (Object.is(_value, val)) return;
       _value = val;
       for (const sub of subscribers) {
-        const nextVal = sub.selector(_value);
-        if (!Object.is(nextVal, sub.prevValue)) {
-          sub.prevValue = nextVal;
+        const next = sub.selector(_value);
+        if (!Object.is(next, sub.prevValue)) {
+          sub.prevValue = next;
           sub.callback();
         }
       }
@@ -1025,65 +1054,79 @@ function ripplePrimitive(initial) {
 }
 
 // src/utils/createProxy.ts
+function isObject(value) {
+  return typeof value === "object" && value !== null;
+}
 function createProxy(target, notify) {
-  return new Proxy(target, {
+  if (target[IS_RIPPLE_PROXY]) return target;
+  const cached = proxyCache.get(target);
+  if (cached) return cached;
+  const proxy = new Proxy(target, {
     get(obj, key, receiver) {
-      const value = Reflect.get(obj, key, receiver);
-      if (typeof value === "object" && value !== null) {
-        return createProxy(value, notify);
+      const val = Reflect.get(obj, key, receiver);
+      if (isObject(val) && !(RIPPLE_BRAND in val)) {
+        if (!proxyCache.has(val)) {
+          const nestedProxy = createProxy(val, notify);
+          proxyCache.set(val, nestedProxy);
+          return nestedProxy;
+        }
+        return proxyCache.get(val);
       }
-      return value;
+      return val;
     },
     set(obj, key, value) {
       const old = obj[key];
-      const newVal = typeof value === "object" && value !== null ? createProxy(value, notify) : value;
-      const result = Reflect.set(obj, key, newVal);
-      if (!Object.is(old, value)) {
-        notify();
-      }
-      return result;
+      const newVal = isObject(value) && !(RIPPLE_BRAND in value) ? createProxy(value, notify) : value;
+      const res = Reflect.set(obj, key, newVal);
+      if (!Object.is(old, newVal)) notify();
+      return res;
     },
     deleteProperty(obj, key) {
-      const result = Reflect.deleteProperty(obj, key);
+      const res = Reflect.deleteProperty(obj, key);
       notify();
-      return result;
+      return res;
     }
   });
+  Object.defineProperty(proxy, IS_RIPPLE_PROXY, {
+    value: true,
+    enumerable: false
+  });
+  proxyCache.set(target, proxy);
+  return proxy;
 }
 
 // src/utils/rippleObject.ts
 function rippleObject(initial) {
-  let rawValue = initial;
-  const subscribers = /* @__PURE__ */ new Set();
-  const notify = () => {
-    for (const sub of subscribers) {
-      const nextVal = sub.selector(proxyValue);
-      if (!Object.is(nextVal, sub.prevValue)) {
-        sub.prevValue = nextVal;
-        sub.callback();
+  let raw = initial;
+  let proxyValue = createProxy(initial, notify);
+  const subs = /* @__PURE__ */ new Set();
+  function notify() {
+    if (isBatching) {
+      dirtyStores.add(notify);
+      return;
+    }
+    for (const s4 of subs) {
+      const next = s4.sel(proxyValue);
+      if (!Object.is(next, s4.prev)) {
+        s4.prev = next;
+        s4.cb();
       }
     }
-  };
-  let proxyValue = createProxy(initial, notify);
-  const subscribe = (callback, selector = (v5) => v5) => {
-    const subscriber = {
-      callback,
-      selector,
-      prevValue: selector(proxyValue)
-    };
-    subscribers.add(subscriber);
-    return () => subscribers.delete(subscriber);
+  }
+  const subscribe = (cb, sel = (v5) => v5) => {
+    const sub = { cb, sel, prev: sel(proxyValue) };
+    subs.add(sub);
+    return () => subs.delete(sub);
   };
   return {
     get value() {
       return proxyValue;
     },
-    set value(newVal) {
-      if (!Object.is(rawValue, newVal)) {
-        rawValue = newVal;
-        proxyValue = createProxy(newVal, notify);
-        notify();
-      }
+    set value(v5) {
+      if (Object.is(raw, v5)) return;
+      raw = v5;
+      proxyValue = createProxy(v5, notify);
+      notify();
     },
     subscribe,
     peek: () => proxyValue,
@@ -1091,14 +1134,37 @@ function rippleObject(initial) {
   };
 }
 
-// src/core/ripple.ts
-var RIPPLE_BRAND = Symbol("signal");
-function ripple(initial) {
-  if (typeof initial === "object" && initial !== null) {
-    return rippleObject(initial);
-  }
-  return ripplePrimitive(initial);
+// src/utils/rippleProxy.ts
+function rippleProxy(target) {
+  const listeners = /* @__PURE__ */ new Set();
+  const notify = () => {
+    if (isBatching) dirtyStores.add(notify);
+    else listeners.forEach((l4) => l4());
+  };
+  const proxy = createProxy(target, notify);
+  return {
+    value: proxy,
+    peek: () => proxy,
+    subscribe: (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    brand: RIPPLE_BRAND
+  };
 }
+
+// src/core/ripple.ts
+var ripple = function(initial) {
+  return isObject2(initial) ? rippleObject(initial) : ripplePrimitive(initial);
+};
+function isObject2(value) {
+  return typeof value === "object" && value !== null || Array.isArray(value);
+}
+Object.assign(ripple, {
+  proxy: rippleProxy,
+  primitive: ripplePrimitive,
+  object: rippleObject
+});
 
 // src/core/useRipple.ts
 var import_react2 = require("react");

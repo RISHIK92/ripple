@@ -1,9 +1,8 @@
 import { RippleInterface } from "../interfaces/ripple.interface";
-import { RIPPLE_BRAND } from "../core/ripple";
+import { RIPPLE_BRAND } from "./constants";
 
 export function ripplePrimitive<T>(initial: T): RippleInterface<T> {
   let _value = initial;
-
   const subscribers = new Set<{
     callback: () => void;
     selector: (v: T) => unknown;
@@ -14,13 +13,9 @@ export function ripplePrimitive<T>(initial: T): RippleInterface<T> {
     callback: () => void,
     selector: (v: T) => unknown = (v) => v
   ) => {
-    const subscriber = {
-      callback,
-      selector,
-      prevValue: selector(_value),
-    };
-    subscribers.add(subscriber);
-    return () => subscribers.delete(subscriber);
+    const sub = { callback, selector, prevValue: selector(_value) };
+    subscribers.add(sub);
+    return () => subscribers.delete(sub);
   };
 
   return {
@@ -31,9 +26,9 @@ export function ripplePrimitive<T>(initial: T): RippleInterface<T> {
       if (Object.is(_value, val)) return;
       _value = val;
       for (const sub of subscribers) {
-        const nextVal = sub.selector(_value);
-        if (!Object.is(nextVal, sub.prevValue)) {
-          sub.prevValue = nextVal;
+        const next = sub.selector(_value);
+        if (!Object.is(next, sub.prevValue)) {
+          sub.prevValue = next;
           sub.callback();
         }
       }

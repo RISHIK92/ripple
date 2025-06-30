@@ -1,6 +1,6 @@
 {
   "name": "ripplex",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "A lightweight, reactive state management library for React.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -35,5 +35,8 @@
     "reactive"
   ],
   "author": "Rishik Chowdary",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "immer": "^10.1.1"
+  }
 }
